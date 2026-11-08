@@ -36,6 +36,7 @@ AisHealth is engineered as a **Clean Architecture Modular Monolith** in Go, prio
 │   │   │   ├── pharmacy/               # FIFO batch valuation, Stock ledger & SIPNAP reporting
 │   │   │   ├── transaction/            # Cashier, Workstations, QRIS & billing engine
 │   │   │   └── specialty/              # HD, IBS/Surgery, Gizi, ANC, MTBS specialized clinical tabs
+│   │   │   └── ...                     # 20+ clinical domains (Inpatient, ICU, Casemix, BPJS, SatuSehat)
 │   │   └── workers/                    # Outbox relay, SIEM audit worker, asynchronous dispatchers
 ```
 
