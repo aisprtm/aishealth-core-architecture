@@ -1,108 +1,79 @@
-# AisHealth Enterprise — Core Architecture & Domain Foundations
+# AisHealth — Public Architecture Reference
 
-[![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go)](https://go.dev/)
-[![Database](https://img.shields.io/badge/PostgreSQL-Multi--Schema-4169E1?style=flat&logo=postgresql)](https://www.postgresql.org/)
-[![Message Broker](https://img.shields.io/badge/RabbitMQ-Transactional%20Outbox-FF6600?style=flat&logo=rabbitmq)](https://www.rabbitmq.com/)
-[![Caching](https://img.shields.io/badge/Redis-7%20In--Memory-DC382D?style=flat&logo=redis)](https://redis.io/)
-[![Walkthrough](https://img.shields.io/badge/YouTube-5--Min%20Architecture%20Demo-FF0000?style=flat&logo=youtube)](https://youtu.be/iMKNz35sLt8)
+AisHealth is an actively developed Hospital Information System (SIMRS) portfolio project. This repository contains a **public architecture reference and selected foundation code** for the wider application.
 
-This repository serves as the public architectural specification, domain boundary blueprint, and engineering reference for **AisHealth Enterprise**—a high-integrity healthcare ERP, Hospital Information System (SIMRS), and Casemix ledger.
+> **Scope note:** This is not the complete, standalone application repository. The full SIMRS implementation is maintained in a separate private repository. The files here are reference material and selected code foundations; this repository is not expected to build or run as a complete SIMRS on its own.
 
----
+## Application technology
 
-## 🏗️ Architectural Topology
+The wider AisHealth application uses:
 
-AisHealth is engineered as a **Clean Architecture Modular Monolith** in Go, prioritizing operational simplicity, transactional integrity, and sub-millisecond query performance over distributed microservice complexity.
+| Area | Technology |
+|---|---|
+| Frontend | React, TypeScript, Vite, Tailwind CSS |
+| Backend | Go, Gin, GORM |
+| Database | PostgreSQL |
+| Cache | Redis |
+| Messaging | RabbitMQ |
 
-```
-├── backend
-│   ├── cmd
-│   │   ├── api/main.go                 # Ingress entrypoint, timezone bootstrap & graceful shutdown
-│   │   ├── cleaner/                    # Ephemeral session & expired draft flushers
-│   │   └── replay_dlq/                 # Dead-letter queue inspection & replay CLI
-│   ├── internal
-│   │   ├── broker/                     # Global SSE real-time dispatcher
-│   │   ├── config/                     # Strict environment & security configuration loader
-│   │   ├── container/                  # Dependency injection container & singleton registry
-│   │   ├── database/
-│   │   │   ├── database.go             # Multi-schema manager, UUIDv7 & audit GORM hooks
-│   │   │   ├── rabbitmq.go             # Reliable AMQP connection pool & worker queues
-│   │   │   └── redis.go                # Resilient TLS-enabled Redis state engine
-│   │   ├── middleware/                 # PBAC, JWT rotation, Rate limiting, Branch timezones
-│   │   ├── models/                     # 46 Relational GORM domain schemas
-│   │   ├── modules/                    # Isolated domain business logic (Service + Repo + Handler)
-│   │   │   ├── auth/                   # PBAC enforcement & WebAuthn FIDO2 credentials
-│   │   │   ├── medrec/                 # Clinical examination, CPOE & triage state machine
-│   │   │   ├── pharmacy/               # FIFO batch valuation, Stock ledger & SIPNAP reporting
-│   │   │   ├── transaction/            # Cashier, Workstations, QRIS & billing engine
-│   │   │   └── specialty/              # HD, IBS/Surgery, Gizi, ANC, MTBS specialized clinical tabs
-│   │   │   └── ...                     # 20+ clinical domains (Inpatient, ICU, Casemix, BPJS, SatuSehat)
-│   │   └── workers/                    # Outbox relay, SIEM audit worker, asynchronous dispatchers
+The application is structured as a Go modular monolith with domain-oriented handlers, services, repositories, and a React/TypeScript client.
+
+## Request and data flow
+
+A typical request follows this path:
+
+```mermaid
+flowchart TD
+    UI[React + TypeScript] --> API[HTTP API client]
+    API --> ROUTE[Gin route and middleware]
+    ROUTE --> HANDLER[Handler]
+    HANDLER --> SERVICE[Domain service]
+    SERVICE --> REPO[Repository]
+    REPO --> DB[(PostgreSQL)]
+    SERVICE --> OUTBOX[Transactional outbox record]
+    OUTBOX --> RELAY[Outbox relay worker]
+    RELAY --> MQ[(RabbitMQ)]
 ```
 
----
+The outbox pattern is used to record application events alongside database changes before they are dispatched asynchronously. Delivery and processing guarantees depend on the relay, broker acknowledgement settings, retries, and consumer idempotency; this repository does not claim exactly-once processing.
 
-## 🔑 Key Engineering Implementations
+## What this repository contains
 
-### 1. Zero-Dual-Write Transactional Outbox
-To eliminate distributed data corruption between PostgreSQL transactions and message broker events, every state-mutating operation writes an event payload to `models.OutboxEvent` within the same database transaction:
-
-```
-[HTTP Request] 
-      │
-      ▼
-[Go Service Layer]
-      │
-      ├── Begin DB Transaction
-      │     ├── 1. Mutate Relational State (e.g., Dispense Medicine)
-      │     ├── 2. Update Stock Ledger Balance (FIFO Valuation)
-      │     └── 3. Insert Outbox Record (Payload, Exchange, Topic)
-      └── Commit DB Transaction
-            │
-            ▼ (Async Polling / CDC Sweep)
-[Outbox Relay Worker] ──► [RabbitMQ Broker] ──► [Background Consumers]
+```text
+.
+├── README.md
+├── frontend/
+│   └── src/
+│       └── App.tsx
+└── internal/
+    └── database/
+        └── database.go
 ```
 
-* **Guarantee:** At-least-once message delivery to downstream consumers (audit logging, electronic prescriptions, billing settlements).
-* **Failure Mitigation:** Failed messages are routed to Dead-Letter Queues (DLQ) with jittered exponential backoff.
+- **`frontend/src/App.tsx`** — a reference for the React application route composition and major feature areas. The page components it imports are part of the private application source and are not included here.
+- **`internal/database/database.go`** — selected Go/GORM database foundation code, including UUIDv7 creation and audit callback examples. The full backend module and its dependency manifest are maintained in the private application repository.
 
-### 2. Timezone Sovereignty (Pure UTC Runtime)
-* The Go runtime is strictly maintained in **UTC** (`time.Local` mutation is forbidden).
-* Multi-branch regional timezones (e.g., Asia/Jakarta, Asia/Makassar, Asia/Jayapura) are evaluated dynamically per branch via HTTP middleware and converted deterministically at the I/O boundary.
+## Engineering topics represented in the wider project
 
-### 3. Native Database Defensive Constraints
-Data integrity is enforced at the PostgreSQL engine level, not merely at the application layer:
-* **Biological Boundary Guards:** Check constraints reject negative vitals and out-of-bound readings (`sp_o2 BETWEEN 0 AND 100`, `sys >= 0`, `dia >= 0`).
-* **Trigram Indexing:** Accelerated full-text search across drug classifications, ICD-10 diagnostic codes, and master specialties using `pg_trgm` GIN indexes.
-* **UUIDv7 Primary Keys:** Native time-sortable 128-bit identifiers to prevent B-Tree index fragmentation under high-frequency writes.
+- Domain-oriented API structure with handlers, services, and repositories.
+- PostgreSQL-backed workflows and transaction boundaries.
+- Pharmacy inventory, batch tracking, and stock-transfer workflows.
+- Role- and permission-based access control.
+- Redis-backed application state and RabbitMQ-based asynchronous processing.
+- Shared TypeScript contracts for frontend forms and API responses.
 
----
+These topics describe areas of the wider codebase; the presence of a topic in this overview does not imply that every workflow is complete, independently deployed, or production-validated.
 
-## 📊 Audited API Chains & Domain Coverage
+## Project status and data safety
 
-AisHealth features **62 audited end-to-end transaction chains**, fully traced from client interfaces down to repository database queries:
+AisHealth is an **active development and portfolio project**. It is not certified or approved for clinical use. Do not use it to make patient-care decisions, connect it to real patient records, or place real patient information in development databases, screenshots, or test fixtures.
 
-| Domain | Scope & Responsibilities |
-| :--- | :--- |
-| **Clinical EMR / CPOE** | Outpatient triage, CPPT handover, electronic prescribing, allergy alerts |
-| **Inpatient & ICU** | Bed allocation graphs, electronic MAR (eMAR), fluid monitoring |
-| **Pharmacy & Inventory** | Multi-branch transfer orders (IBT), batch tracking, expiration monitoring |
-| **Billing & Cashier** | Multi-payer tariff engine, dynamic QRIS generation, workstation pair-tokens |
-| **Surgical & HD** | Operating theater booking (IBS), dialysis observation logs |
+No performance figures, delivery guarantees, or production-readiness claims are made in this reference.
 
----
+## Walkthrough
 
-## 📹 Full System Demonstration
+[Watch the AisHealth project walkthrough](https://youtu.be/iMKNz35sLt8).
 
-A dense 5-minute technical walkthrough demonstrating the live platform, state boundaries, and schema architecture:
+## Author
 
-👉 **[Watch the 5-Minute Technical Demo on YouTube](https://youtu.be/iMKNz35sLt8)**
-
----
-
-## 👤 Author
-
-* **Haris Pratama** — Full-Stack & Systems Engineer
-* Email: [aisharis@proton.me](mailto:aisharis@proton.me)
-* LinkedIn: [linkedin.com/in/haris-pratama-dev](https://www.linkedin.com/in/haris-pratama-dev/)
-* Domicile: Pekanbaru, Indonesia (UTC+7)
+**Haris Pratama** · [LinkedIn](https://www.linkedin.com/in/haris-pratama-dev/)
